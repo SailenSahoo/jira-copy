@@ -18,6 +18,17 @@ app.include_router(comments.router)
 app.include_router(boards.router)
 app.include_router(users.router)
 
+from db import SessionLocal
+
+@app.get("/test-db")
+def test_db():
+    try:
+        db = SessionLocal()
+        db.execute("SELECT 1 FROM DUAL")
+        return {"status": "Connection successful"}
+    except Exception as e:
+        return {"error": str(e)}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)
