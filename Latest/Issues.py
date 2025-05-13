@@ -1,39 +1,40 @@
-from fastapi import APIRouter
-from connection import get_db_connection
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+from db import get_db
+from models import Issue, CustomField, Comment
 
 router = APIRouter()
 
 @router.get("/issues")
-def get_issues():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT
-            ji.issuenum,
-            p.pkey,
-            ji.summary,
-            cfv_status.stringvalue AS status,
-            cfv_priority.stringvalue AS priority
-        FROM jiraissue ji
-        JOIN project p ON ji.project = p.id
-        LEFT JOIN customfieldvalue cfv_status
-            ON ji.id = cfv_status.issue
-            AND cfv_status.customfield = 10000  -- replace with actual status customfield id
-        LEFT JOIN customfieldvalue cfv_priority
-            ON ji.id = cfv_priority.issue
-            AND cfv_priority.customfield = 10001  -- replace with actual priority customfield id
-        WHERE ji.archived = '1'
-    """)
-    result = []
-    for row in cursor.fetchall():
-        result.append({
-            "key": f"{row[1]}-{row[0]}",
-            "summary": row[2],
-            "customFields": {
-                "status": row[3],
-                "priority": row[4]
-            }
+def get_all_issues(db: Session = Depends(get_db)):
+    issues_data = db.query(Issue).all()
+    results = []
+    for issue in issues_data:
+        comments = db.query(Comment).filter(Comment.issue_id == issue.id).all()
+        custom_fields = db.query(CustomField).filter(CustomField.issue_id == issue.id).all()
+        results.append({
+            "id": issue.id,
+            "key": f"{issue.pkey}-{issue.issuenum}",
+            "summary": issue.summary,
+            "description": issue.description,
+            "status": issue.status,
+            "priority": issue.priority,
+            "created": issue.created,
+            "updated": issue.updated,
+            "reporter": issue.reporter,
+            "assignee": issue.assignee,
+            "project_id": issue.project,
+            "custom_fields": [
+                {"field": field.customfield_name, "value": field.stringvalue}
+                for field in custom_fields
+            ],
+            "comments": [
+                {
+                    "author": comment.author,
+                    "body": comment.body,
+                    "created": comment.created
+                }
+                for comment in comments
+            ]
         })
-    cursor.close()
-    conn.close()
-    return result
+    return results
