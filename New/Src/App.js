@@ -1,25 +1,28 @@
-import React, { useEffect, useState } from 'react';
-import { fetchIssues } from './services/api';
-import SearchBar from './components/SearchBar';
+import React, { useState } from 'react';
 import IssueList from './components/IssueList';
+import ProjectList from './components/ProjectList';
+import BoardList from './components/BoardList';
 
 function App() {
-  const [issues, setIssues] = useState([]);
-  const [searchText, setSearchText] = useState('');
-
-  useEffect(() => {
-    fetchIssues().then(setIssues);
-  }, []);
-
-  const filteredIssues = issues.filter((issue) =>
-    `${issue.pkey}-${issue.issuenum}`.toLowerCase().includes(searchText.toLowerCase())
-  );
+  const [searchKey, setSearchKey] = useState('');
 
   return (
-    <div style={{ padding: '20px' }}>
-      <h2>Jira Issues</h2>
-      <SearchBar value={searchText} onChange={setSearchText} />
-      <IssueList issues={filteredIssues} />
+    <div style={{ padding: '20px', fontFamily: 'Arial' }}>
+      <h1>Jira Clone Dashboard</h1>
+
+      <input
+        type="text"
+        placeholder="Search by Issue Key"
+        value={searchKey}
+        onChange={(e) => setSearchKey(e.target.value)}
+        style={{ padding: '8px', width: '300px', marginBottom: '20px' }}
+      />
+
+      <IssueList searchKey={searchKey} />
+      <hr />
+      <ProjectList />
+      <hr />
+      <BoardList />
     </div>
   );
 }
