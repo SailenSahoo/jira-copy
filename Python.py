@@ -1,87 +1,97 @@
 import requests
 import csv
 import os
+import json
 from requests.auth import HTTPBasicAuth
 
-# --- Configuration ---
-JIRA_URL = 'https://your-company.atlassian.net'
+# --- 1. Configuration ---
+JIRA_URL = 'https://amd.atlassian.net' # Updated based on your screenshot
 EMAIL = 'your-email@example.com'
 API_TOKEN = 'your_api_token'
 
-# Path for Windows Downloads
 downloads_path = os.path.join(os.path.expanduser("~"), "Downloads")
 OUTPUT_FILE = os.path.join(downloads_path, "rejected_issues_report.csv")
 
-# JQL Query
+# Ensure JQL matches your requirement
 JQL_QUERY = 'status = Closed AND status WAS Rejected AND "Rejected Date" is EMPTY'
 
-# Setup Authentication
+# --- 2. Setup ---
 auth = HTTPBasicAuth(EMAIL, API_TOKEN)
-headers = {"Accept": "application/json"}
+headers = {
+    "Accept": "application/json",
+    "Content-Type": "application/json"
+}
 
-all_results = []
+all_issues = []
 start_at = 0
 max_results = 100
 
-print("Fetching data directly from Jira API...")
+print("Connecting to the new Jira Search JQL API...")
 
+# --- 3. The Fetch Loop (Using POST as required) ---
 while True:
-    # Jira Cloud REST API v3 Search Endpoint
-    url = f"{JIRA_URL}/rest/api/3/search"
+    # This is the NEW endpoint you were instructed to migrate to
+    search_url = f"{JIRA_URL}/rest/api/3/search/jql"
     
-    query_params = {
-        'jql': JQL_QUERY,
-        'startAt': start_at,
-        'maxResults': max_results,
-        'expand': 'changelog',
-        'fields': 'key' # We only need the key and the history
+    # In the new API, we send data in a JSON body (POST), not in the URL (GET)
+    payload = {
+        "jql": JQL_QUERY,
+        "startAt": start_at,
+        "maxResults": max_results,
+        "expand": ["changelog"],
+        "fields": ["key"] 
     }
 
-    response = requests.request("GET", url, headers=headers, params=query_params, auth=auth)
+    response = requests.post(
+        search_url, 
+        data=json.dumps(payload), 
+        headers=headers, 
+        auth=auth
+    )
     
     if response.status_code != 200:
-        print(f"Error: {response.status_code} - {response.text}")
+        print(f"Failed! HTTP {response.status_code}: {response.text}")
         break
 
     data = response.json()
-    issues = data.get('issues', [])
+    batch = data.get('issues', [])
     
-    if not issues:
+    if not batch:
         break
 
-    all_results.extend(issues)
-    print(f"Retrieved {len(all_results)} issues...")
+    all_issues.extend(batch)
+    print(f"Retrieved {len(all_issues)} of {data.get('total')} issues...")
     
-    # Check if we've reached the total
-    if len(all_results) >= data.get('total', 0):
+    if len(all_issues) >= data.get('total', 0):
         break
         
     start_at += max_results
 
-print(f"Processing {len(all_results)} issues and writing to CSV...")
+# --- 4. Write to CSV ---
+print(f"Writing results to {OUTPUT_FILE}...")
 
 with open(OUTPUT_FILE, mode='w', newline='', encoding='utf-8') as csv_file:
     writer = csv.writer(csv_file)
     writer.writerow(['Issue Key', 'Latest Rejected Date'])
 
-    for issue in all_results:
+    for issue in all_issues:
         issue_key = issue['key']
         latest_rejected = "Not Found"
         
-        # Dig into the changelog
+        # Access the changelog histories
         histories = issue.get('changelog', {}).get('histories', [])
         
         # Reverse to find the most recent transition to 'Rejected'
         for history in reversed(histories):
-            found_rejected = False
+            found_transition = False
             for item in history.get('items', []):
                 if item.get('field') == 'status' and item.get('toString') == 'Rejected':
                     latest_rejected = history.get('created')
-                    found_rejected = True
+                    found_transition = True
                     break
-            if found_rejected:
+            if found_transition:
                 break
         
         writer.writerow([issue_key, latest_rejected])
 
-print(f"Done! File saved to: {OUTPUT_FILE}")
+print("Process Complete.")
