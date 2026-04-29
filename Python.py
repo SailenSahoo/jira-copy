@@ -1,52 +1,50 @@
-import requests
-from requests.auth import HTTPBasicAuth
 import csv
-import json
+from jira import JIRA
 
-# --- CONFIGURATION ---
-DOMAIN = "your-company.atlassian.net"
-EMAIL = "your-email@example.com"
-API_TOKEN = "your-api-token-here"
-OUTPUT_FILE = "jira_statuses.csv"
+# --- Configuration ---
+# Use your full Jira Cloud URL
+JIRA_SERVER = 'https://your-company.atlassian.net' 
+# Use the email address associated with your Atlassian account
+JIRA_USER = 'your-email@example.com'
+# Use the API Token generated from id.atlassian.com
+JIRA_API_TOKEN = 'your_generated_api_token'
+OUTPUT_FILE = 'rejected_issues_report.csv'
 
-def export_jira_statuses():
-    url = f"https://{DOMAIN}/rest/api/3/status"
-    
-    auth = HTTPBasicAuth(EMAIL, API_TOKEN)
-    headers = {
-        "Accept": "application/json"
-    }
+# JQL: Current status Closed, was Rejected, but Rejected Date field is empty
+JQL_QUERY = 'status = Closed AND status WAS Rejected AND "Rejected Date" is EMPTY'
 
-    print(f"Connecting to {DOMAIN}...")
+# Connect to Jira Cloud
+jira = JIRA(
+    server=JIRA_SERVER, 
+    basic_auth=(JIRA_USER, JIRA_API_TOKEN)
+)
 
-    try:
-        response = requests.request("GET", url, headers=headers, auth=auth)
-        response.raise_for_status()
+print("Searching for issues...")
+
+# We use expand='changelog' here to pull history data for all issues at once
+issues = jira.search_issues(JQL_QUERY, expand='changelog', maxResults=100)
+
+print(f"Found {len(issues)} issues. Writing to {OUTPUT_FILE}...")
+
+with open(OUTPUT_FILE, mode='w', newline='', encoding='utf-8') as csv_file:
+    writer = csv.writer(csv_file)
+    writer.writerow(['Issue Key', 'Latest Rejected Date'])
+
+    for issue in issues:
+        latest_rejected = "Not Found"
         
-        statuses = response.json()
+        # Access the changelog we expanded in the search
+        # We reverse it to find the MOST RECENT transition to 'Rejected' first
+        for history in reversed(issue.changelog.histories):
+            found = False
+            for item in history.items:
+                if item.field == 'status' and item.toString == 'Rejected':
+                    latest_rejected = history.created
+                    found = True
+                    break
+            if found:
+                break
+        
+        writer.writerow([issue.key, latest_rejected])
 
-        # Define the CSV headers
-        fieldnames = ['ID', 'Name', 'Category', 'Description']
-
-        with open(OUTPUT_FILE, mode='w', newline='', encoding='utf-8') as file:
-            writer = csv.DictWriter(file, fieldnames=fieldnames)
-            writer.writeheader()
-
-            for status in statuses:
-                writer.writerow({
-                    'ID': status.get('id'),
-                    'Name': status.get('name'),
-                    'Category': status.get('statusCategory', {}).get('name', 'N/A'),
-                    'Description': status.get('description', '')
-                })
-
-        print(f"Success! Exported {len(statuses)} statuses to {OUTPUT_FILE}")
-
-    except requests.exceptions.HTTPError as err:
-        print(f"HTTP Error: {err}")
-    except Exception as e:
-        print(f"An error occurred: {e}")
-
-if __name__ == "__main__":
-    export_jira_statuses()
-    
+print("Done!")
