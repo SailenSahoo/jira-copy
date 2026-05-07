@@ -13,19 +13,19 @@ from datetime import datetime
 # ==========================================
 JIRA_BASE_URL    = "https://amd.atlassian.net"
 JIRA_EMAIL       = "sailen.sahoo@amd.com"
-JIRA_API_TOKEN   = "YOUR_TOKEN_HERE"
+JIRA_API_TOKEN   = "YOUR_NEW_TOKEN"  # Update this!
 
-# JQL to find potential candidates who reached Closed via both paths
-JQL_QUERY        = 'project = DECH AND status = Closed AND status WAS Rejected AND status WAS Implemented'
+# JQL updated to find issues that have performed this specific transition
+JQL_QUERY        = 'project = DECH AND status CHANGED FROM "Automated Review Submit" TO "Peer Review"'
 
 downloads_path   = os.path.join(os.path.expanduser("~"), "Downloads")
-OUTPUT_CSV_PATH  = os.path.join(downloads_path, "issues_to_clear_rejected_date.csv")
+OUTPUT_CSV_PATH  = os.path.join(downloads_path, "peer_review_first_dates.csv")
 
 SEARCH_PAGE_SIZE = 50
 CHANGELOG_PAGE_SIZE = 100
 
 # ==========================================
-# # HELPER FUNCTIONS (From your screenshots)
+# # HELPER FUNCTIONS
 # ==========================================
 
 def jira_headers(email: str, api_token: str) -> Dict[str, str]:
@@ -48,6 +48,8 @@ def request_json(session, method, url, **kwargs):
             time.sleep(backoff_seconds)
             backoff_seconds *= 2
             continue
+        if not resp.ok:
+            raise RuntimeError(f"HTTP {resp.status_code} for {url}: {resp.text}")
         return resp.json()
 
 def search_issues(session, base_url, jql, page_size=100):
@@ -58,10 +60,15 @@ def search_issues(session, base_url, jql, page_size=100):
         body = {"jql": jql, "maxResults": page_size, "fields": ["summary"]}
         if next_page_token:
             body["nextPageToken"] = next_page_token
+        
         data = request_json(session, "POST", url, json=body)
         batch = data.get("issues", [])
         for issue in batch:
-            issues.append({"key": issue["key"], "summary": issue.get("fields", {}).get("summary", "")})
+            issues.append({
+                "key": issue["key"], 
+                "summary": issue.get("fields", {}).get("summary", "")
+            })
+        
         next_page_token = data.get("nextPageToken")
         if data.get("isLast", True) or not next_page_token:
             break
@@ -81,19 +88,18 @@ def fetch_full_changelog(session, base_url, issue_key, page_size=100):
             break
     return histories
 
-def get_latest_transition(histories, from_status, to_status):
-    """Finds the latest timestamp for a specific status transition."""
-    latest_dt = None
-    for hist in histories:
-        for item in hist.get("items", []):
-            if item.get("field") == "status":
-                if item.get("fromString") == from_status and item.get("toString") == to_status:
-                    # Parse Jira date: '2024-05-05T10:00:00.000+0000'
-                    dt_str = hist.get("created")[:23]
-                    dt = datetime.strptime(dt_str, '%Y-%m-%dT%H:%M:%S.%f')
-                    if not latest_dt or dt > latest_dt:
-                        latest_dt = dt
-    return latest_dt
+def get_first_specific_transition(histories, from_status, to_status):
+    """Finds the timestamp of the EARLIEST specific status transition."""
+    # Ensure histories are sorted by creation date (earliest first)
+    histories_sorted = sorted(histories, key=lambda h: h.get("created", ""))
+    
+    for history in histories_sorted:
+        for item in history.get('items', []):
+            if item.get('field') == 'status':
+                if item.get('fromString') == from_status and item.get('toString') == to_status:
+                    # Return the very first match found
+                    return history.get("created")
+    return None
 
 # ==========================================
 # # MAIN LOGIC
@@ -104,12 +110,12 @@ def main():
     with requests.Session() as session:
         session.headers.update(jira_headers(JIRA_EMAIL, JIRA_API_TOKEN))
         
-        print(f"Searching for issues...")
+        print(f"Fetching issues via JQL...")
         issues = search_issues(session, base_url, JQL_QUERY, page_size=SEARCH_PAGE_SIZE)
-        print(f"Found {len(issues)} candidate issues. Analyzing histories...")
+        print(f"Found {len(issues)} issues. Extracting first transition dates...")
 
         with open(OUTPUT_CSV_PATH, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=["issue_key", "summary", "reason"])
+            writer = csv.DictWriter(f, fieldnames=["issue_key", "summary", "first_peer_review_date"])
             writer.writeheader()
 
             for idx, issue in enumerate(issues, start=1):
@@ -117,27 +123,27 @@ def main():
                 try:
                     histories = fetch_full_changelog(session, base_url, key, page_size=CHANGELOG_PAGE_SIZE)
                     
-                    # Get latest of both types of transitions
-                    rejected_dt = get_latest_transition(histories, "Rejected", "Closed")
-                    implemented_dt = get_latest_transition(histories, "Implemented", "Closed")
+                    # Logic: 1st time moved from Automated Review Submit -> Peer Review
+                    first_date = get_first_specific_transition(
+                        histories, 
+                        "Automated Review Submit", 
+                        "Peer Review"
+                    )
 
-                    if rejected_dt and implemented_dt:
-                        # CORE LOGIC: Check if Implemented -> Closed happened LATER
-                        if implemented_dt > rejected_dt:
-                            writer.writerow({
-                                "issue_key": key,
-                                "summary": issue["summary"],
-                                "reason": f"Implemented({implemented_dt}) > Rejected({rejected_dt})"
-                            })
-                            print(f"[MATCH] {key}")
+                    writer.writerow({
+                        "issue_key": key,
+                        "summary": issue["summary"],
+                        "first_peer_review_date": first_date or "N/A"
+                    })
 
                 except Exception as e:
-                    print(f"[ERROR] {key}: {e}", file=sys.stderr)
+                    print(f"[WARN] Error processing {key}: {e}", file=sys.stderr)
 
-                if idx % 25 == 0:
+                if idx % 10 == 0:
                     print(f"Processed {idx}/{len(issues)} issues...")
 
-    print(f"Done. Results written to: {OUTPUT_CSV_PATH}")
+    print(f"\nDone! Results saved to: {OUTPUT_CSV_PATH}")
 
 if __name__ == "__main__":
     main()
+    
