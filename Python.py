@@ -13,13 +13,13 @@ from datetime import datetime
 # ==========================================
 JIRA_BASE_URL    = "https://amd.atlassian.net"
 JIRA_EMAIL       = "sailen.sahoo@amd.com"
-JIRA_API_TOKEN   = "YOUR_NEW_TOKEN"  # Update this!
+JIRA_API_TOKEN   = "YOUR_API_TOKEN" # Use a fresh token!
 
-# JQL updated to find issues that have performed this specific transition
+# JQL remains the same as we want issues that have undergone this change
 JQL_QUERY        = 'project = DECH AND status CHANGED FROM "Automated Review Submit" TO "Peer Review"'
 
 downloads_path   = os.path.join(os.path.expanduser("~"), "Downloads")
-OUTPUT_CSV_PATH  = os.path.join(downloads_path, "peer_review_first_dates.csv")
+OUTPUT_CSV_PATH  = os.path.join(downloads_path, "peer_review_latest_dates.csv")
 
 SEARCH_PAGE_SIZE = 50
 CHANGELOG_PAGE_SIZE = 100
@@ -88,16 +88,16 @@ def fetch_full_changelog(session, base_url, issue_key, page_size=100):
             break
     return histories
 
-def get_first_specific_transition(histories, from_status, to_status):
-    """Finds the timestamp of the EARLIEST specific status transition."""
-    # Ensure histories are sorted by creation date (earliest first)
-    histories_sorted = sorted(histories, key=lambda h: h.get("created", ""))
+def get_latest_specific_transition(histories, from_status, to_status):
+    """Finds the timestamp of the LATEST specific status transition."""
+    # Sort histories by creation date descending (newest first)
+    histories_sorted = sorted(histories, key=lambda h: h.get("created", ""), reverse=True)
     
     for history in histories_sorted:
         for item in history.get('items', []):
             if item.get('field') == 'status':
                 if item.get('fromString') == from_status and item.get('toString') == to_status:
-                    # Return the very first match found
+                    # Return the very first match found in a descending list (the latest)
                     return history.get("created")
     return None
 
@@ -110,12 +110,12 @@ def main():
     with requests.Session() as session:
         session.headers.update(jira_headers(JIRA_EMAIL, JIRA_API_TOKEN))
         
-        print(f"Fetching issues via JQL...")
+        print(f"Fetching issues...")
         issues = search_issues(session, base_url, JQL_QUERY, page_size=SEARCH_PAGE_SIZE)
-        print(f"Found {len(issues)} issues. Extracting first transition dates...")
+        print(f"Found {len(issues)} issues. Extracting latest transition dates...")
 
         with open(OUTPUT_CSV_PATH, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=["issue_key", "summary", "first_peer_review_date"])
+            writer = csv.DictWriter(f, fieldnames=["issue_key", "summary", "latest_peer_review_date"])
             writer.writeheader()
 
             for idx, issue in enumerate(issues, start=1):
@@ -123,8 +123,8 @@ def main():
                 try:
                     histories = fetch_full_changelog(session, base_url, key, page_size=CHANGELOG_PAGE_SIZE)
                     
-                    # Logic: 1st time moved from Automated Review Submit -> Peer Review
-                    first_date = get_first_specific_transition(
+                    # Logic: Latest time moved from Automated Review Submit -> Peer Review
+                    latest_date = get_latest_specific_transition(
                         histories, 
                         "Automated Review Submit", 
                         "Peer Review"
@@ -133,7 +133,7 @@ def main():
                     writer.writerow({
                         "issue_key": key,
                         "summary": issue["summary"],
-                        "first_peer_review_date": first_date or "N/A"
+                        "latest_peer_review_date": latest_date or "N/A"
                     })
 
                 except Exception as e:
